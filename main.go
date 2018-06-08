@@ -3,13 +3,15 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-	"os"
 	"time"
-	jwt "github.com/dgrijalva/jwt-go"
+
+	"github.com/dgrijalva/jwt-go"
 	"github.com/dgrijalva/jwt-go/request"
 	"github.com/gorilla/mux"
+	"github.com/pkg/errors"
+
+	rsaParser "github.com/srttk/jwtauth_test/rsa_parser"
 )
 
 var users = map[string]string{"naren": "passme", "admin": "password"}
@@ -18,17 +20,13 @@ type Response struct {
 	Status string `json:"status"`
 }
 
-func init() {
-	os.Setenv("SESSION_SECRET", "k;lasjdGRA:0923458jfkldls")
-}
-
-func HealthcheckHandler(w http.ResponseWriter, r *http.Request) {
-	tokenString, err := request.HeaderExtractor{"access_token"}.ExtractToken(r)
+func ParseJwt(w http.ResponseWriter, r *http.Request) {
+	tokenString, err := request.OAuth2Extractor.ExtractToken(r)
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("Unexpected signing method: %v", token.Header["alg"])
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, errors.New("Unexpected signing method")
 		}
-		return []byte(os.Getenv("SESSION_SECRET")), nil
+		return rsaParser.PublicKey, nil
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusForbidden)
@@ -47,52 +45,40 @@ func HealthcheckHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func getTokenHandler(w http.ResponseWriter, r *http.Request) {
-	err := r.ParseForm()
+func GenerateJwt(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+
+	name, ok := query["name"]
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, "err. required name query")
+		return
+	}
+
+	password, ok := query["password"]
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, "err. required password query")
+		return
+	}
+	claims := jwt.MapClaims {
+		"name": name,
+		"password": password,
+		"exp":   time.Now().Add(time.Hour * 24 * 30).Unix(),
+		"iat":   time.Now().Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tokenString, err := token.SignedString(rsaParser.PrivateKey)
 	if err != nil {
-		http.Error(w, "Please pass the data as URL form encoded", http.StatusBadRequest)
+		fmt.Fprint(w, "token generate err")
 		return
 	}
-	username := r.PostForm.Get("username")
-	password := r.PostForm.Get("password")
-	if originalPassword, ok := users[username]; ok {
-		if password == originalPassword {
-			claims := jwt.MapClaims {
-				"username": username,
-				"ExpiresAt": 15000,
-				"IssuedAt": time.Now().Unix(),
-			}
-			token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-			tokenString, err := token.SignedString([]byte(os.Getenv("SESSION_SECRET")))
-			if err != nil {
-				w.WriteHeader(http.StatusBadGateway)
-				w.Write([]byte(err.Error()))
-			}
-			response := Response{Token: tokenString, Status: "success"}
-			responseJSON, _ := json.Marshal(response)
-			w.WriteHeader(http.StatusOK)
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(responseJSON)
-		} else {
-			http.Error(w, "Invalid Credentials", http.StatusUnauthorized)
-			return
-		}
-	} else {
-		http.Error(w, "User is not found", http.StatusNotFound)
-		return
-	}
+	fmt.Fprint(w, tokenString)
 }
 
 func main() {
 	r := mux.NewRouter()
-	r.HandleFunc("/getToken", getTokenHandler)
-	r.HandleFunc("/healthcheck", HealthcheckHandler)
-	http.Handle("/", r)
-	srv := &http.Server{
-		Handler: r,
-		Addr: "127.0.0.1:8000",
-		WriteTimeout: 15 * time.Second,
-		ReadTimeout: 15 * time.Second,
-	}
-	log.Fatal(srv.ListenAndServe())
+	r.HandleFunc("/generate_jwt", GenerateJwt)
+	r.HandleFunc("/parse_jwt", ParseJwt)
+	http.ListenAndServe(":8080", r)
 }
