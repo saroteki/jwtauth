@@ -11,7 +11,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
 
-	rsaParser "github.com/srttk/jwtauth_test/rsa_parser"
+	rsaParser "github.com/srttk/jwt_test/rsa_parser"
 )
 
 var users = map[string]string{"naren": "passme", "admin": "password"}
